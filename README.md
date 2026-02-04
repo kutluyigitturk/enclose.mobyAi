@@ -1,4 +1,4 @@
-# <img src="assets/MobyDick.png" width="40" height="40" alt="Enclose Moby Logo" /> Enclose Moby AI: Hybrid Optimization Solver Enclose Moby AI: Hybrid Optimization Solver
+# <img src="assets/MobyDick.png" width="40" height="40" alt="Enclose Moby Logo" /> Enclose Moby AI: Hybrid Optimization Solver
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)

@@ -1,22 +1,26 @@
-# <img src="assets/MobyDick.png" width="40" height="40" alt="Enclose Moby Logo" /> Enclose Moby AI: Hybrid Optimization Solver & Procedural Generator
-
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Status](https://img.shields.io/badge/Status-Phase%202%20Completed-success)
-
-**Enclose Moby AI** is an advanced algorithmic suite designed to solve and generate levels for the "Enclose Moby" puzzle game.
-
-Unlike standard solvers that get stuck in local optima, this project utilizes a **Genetic Algorithm with Soft Penalty** logic to find global maximums (perfect traps). Furthermore, it features a **Procedural Level Generator** capable of designing strategic, guaranteed-solvable maps for game engines.
+<h1 align="center"><img src="assets/MobyDick.png" width="30" height="30" alt="Enclose Moby Logo" /> Enclose Moby AI: Hybrid Optimization Solver & Procedural Generator</h1>
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8%2B-blue" alt="Python">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+  <img src="https://img.shields.io/badge/Status-Phase%202%20Completed-success" alt="Status">
+</p>
+<p align="center">
+  <a href="https://kutluyigitturk.github.io/enclose.moby">
+    <img src="https://img.shields.io/badge/▶_PLAY_NOW-1a1a2e?style=for-the-badge&logo=github&logoColor=white" alt="Play Now">
+  </a>
+</p>
+<p align="center">
+  <strong>Enclose Moby AI</strong> is an advanced algorithmic suite designed to solve and generate levels for the "Enclose Moby" puzzle game.
+</p>
+<p align="center">
+  Unlike standard solvers that get stuck in local optima, this project utilizes a <strong>Genetic Algorithm with Soft Penalty</strong> logic to find global maximums (perfect traps). Furthermore, it features a <strong>Procedural Level Generator</strong> capable of designing strategic, guaranteed-solvable maps for game engines.
+</p>
 
 ---
 
 ## 🎮 About the Game
 
 "Enclose Moby" is a puzzle game where players must trap a whale (Moby) by strategically placing walls (buoys) on a grid-based ocean map. The goal is to **maximize the enclosed area** while using a limited number of walls.
-
-<p align="center">
-  <img src="assets/gameplay.png" alt="Gameplay Screenshot" width="400">
-</p>
 
 ---
 

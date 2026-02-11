@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 
 from models import MapState
 from genetic_solver import GeneticSolver
+from optimizer import optimize_solution
 
 
 class BlindSolver:
@@ -19,11 +20,11 @@ class BlindSolver:
     """
 
     # --- CONSTANTS ---
-    DEFAULT_PATIENCE = 15
-    DEFAULT_MAX_ATTEMPTS = 50
-    GA_POPULATION_SIZE = 400
-    GA_MUTATION_RATE = 0.4
-    GA_GENERATIONS = 120
+    DEFAULT_PATIENCE = 50
+    DEFAULT_MAX_ATTEMPTS = 200
+    GA_POPULATION_SIZE = 1000
+    GA_MUTATION_RATE = 0.5
+    GA_GENERATIONS = 200
 
     def __init__(self, map_state: MapState):
         """
@@ -92,11 +93,27 @@ class BlindSolver:
 
             if no_improvement_count >= patience:
                 if verbose:
-                    if best_area > 0:
-                        print(f"\n✅ SATURATION REACHED: Could not beat {best_area} in the last {patience} attempts.")
-                    else:
-                        print(f"\n❌ Solution not found.")
-                break
+                    print(f"\n⚠️ STAGNATION DETECTED at {best_area} points.")
+
+                # Eğer hedefi (109) bulamadıysak ama hala deneme hakkımız varsa (max_attempts),
+                # RADİKAL BİR KARAR AL: Popülasyonu sıfırla!
+                if target_area and best_area < target_area and attempt < max_attempts * 0.8:
+                    print("♻️ PERFORMING SOFT RESTART (Killing population to escape local optimum)...")
+
+                    # Sabır sayacını sıfırla ki hemen çıkmasın
+                    no_improvement_count = 0
+
+                    # Solver'ı yeniden başlatmak için map_state'i bozmadan
+                    # sadece döngünün devam etmesini sağla.
+                    # (Not: Gerçek bir 'reset' için GeneticSolver her tur yeniden yaratılıyor zaten,
+                    # bu yüzden sadece 'continue' diyerek sabrı sıfırlamak yeterli olacaktır
+                    # çünkü GA her döngüde sıfırdan başlar.)
+                    continue
+                else:
+                    # Artık gerçekten yapacak bir şey yok, bitir.
+                    if verbose:
+                        print(f"✅ SATURATION REACHED: Could not beat {best_area}.")
+                    break
 
         return {
             'area': best_area,
@@ -106,13 +123,30 @@ class BlindSolver:
         }
 
     def _run_genetic_algorithm(self) -> Dict:
-        """Runs a single GA instance."""
+        """Runs a single GA instance and optimizes the result."""
         ga = GeneticSolver(
             self.map_state,
             population_size=self.GA_POPULATION_SIZE,
             mutation_rate=self.GA_MUTATION_RATE
         )
-        return ga.solve(generations=self.GA_GENERATIONS)
+        result = ga.solve(generations=self.GA_GENERATIONS)
+
+        # GA çözümünü optimize et
+        if result['solvable'] and result['solution']:
+            optimized_walls, optimized_area = optimize_solution(
+                result['solution'],
+                self.map_state.grid,
+                self.map_state.moby_pos,
+                self.map_state.water_cells,
+                max_iterations=15,
+                verbose=False  # Her GA'da çıktı vermesin
+            )
+
+            if optimized_area > result['optimal_area']:
+                result['solution'] = optimized_walls
+                result['optimal_area'] = optimized_area
+
+        return result
 
     def _print_header(self, patience: int) -> None:
         """Prints the header."""

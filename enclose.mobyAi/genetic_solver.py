@@ -1,324 +1,290 @@
 """
-Genetic Algorithm based solver.
+Genetic Algorithm based solver (Island Model).
+
+Key Idea:
+- Instead of one mixed population, we maintain 4 SEPARATE populations (Islands).
+- Each island focuses on a different quadrant of the map.
+- Migration between islands is BANNED to prevent the 87-point solution (local optimum)
+  from dominating the 109-point solution (global optimum) during early generations.
 """
 
-from typing import List, Tuple, Dict
+from __future__ import annotations
+
+from typing import List, Tuple, Dict, Set, FrozenSet, Optional
 import random
 import numpy as np
 
 from models import MapState
-from analysis import place_walls, analyze_escape, get_stochastic_escape_path
+from analysis import (
+    analyze_escape_walls,
+    analyze_escape_detailed_walls,
+    get_stochastic_escape_path_walls,
+)
+
+
+Coord = Tuple[int, int]
+IndexSet = Set[int]
 
 
 class GeneticSolver:
-    """
-    Genetic Algorithm attempting to maximize the enclosed area for Moby.
-
-    Features:
-        - Soft Penalty: Evolution continues even in escape scenarios
-        - Stochastic path blocking: Exploring different escape routes
-        - Tournament selection: Preserving diversity
-    """
-
     # --- FITNESS CONSTANTS ---
-    FITNESS_TRAP_BASE = 20000          # Base score for successful entrapment
-    FITNESS_AREA_MULTIPLIER = 100      # Multiplier per area unit
-    FITNESS_SOFT_BASE = 5000           # Base score for escape scenarios
-    FITNESS_FRONTIER_PENALTY = 500     # Penalty for each escape frontier
-    FITNESS_MIN_SCORE = 100            # Minimum fitness score
+    BIG_GAP = 1_000_000
+    ESCAPE_FRONTIER_PENALTY = 5000
 
-    # --- MUTATION STRATEGY RATIOS ---
-    MUTATION_PATH_BLOCK_THRESHOLD = 0.40    # 40% path blocking
-    MUTATION_GEOMETRY_THRESHOLD = 0.70      # 30% geometry (0.70 - 0.40)
-    # Remaining 30% is random
+    # --- GA CONSTANTS ---
+    ELITE_RATIO = 0.05
+    TOURNAMENT_SIZE = 3
 
-    # --- OTHER CONSTANTS ---
-    ELITE_RATIO = 0.10                 # Elite individual ratio
-    TOURNAMENT_SIZE = 5                # Tournament selection size
-    EDGE_BIAS_PROBABILITY = 0.50       # Edge-focused start probability
-    EDGE_COLUMN_COUNT = 4              # Number of columns considered as edge
+    # Mutasyon
+    MUTATION_RATE = 0.6
+    MUTATION_SHIFT_PROB = 0.90
+
+    GENERATION_PATIENCE = 150
 
     def __init__(
         self,
         map_state: MapState,
-        population_size: int = 300,
-        mutation_rate: float = 0.3
+        population_size: int = 400, # Her adaya 100 kişi düşecek
+        mutation_rate: float = 0.5,
+        seed: Optional[int] = None,
     ):
-        """
-        Args:
-            map_state: The state of the map
-            population_size: Size of the population
-            mutation_rate: Mutation rate (0.0 - 1.0)
-        """
         self.map_state = map_state
         self.grid = map_state.grid
         self.rows, self.cols = self.grid.shape
         self.moby_pos = map_state.moby_pos
         self.max_walls = map_state.max_walls
-        self.water_cells = map_state.water_cells
-        self.water_cells_set = map_state.water_cells_set
+
+        self.water_cells: List[Coord] = map_state.water_cells
+        self.n = len(self.water_cells)
+        self.coord_to_idx: Dict[Coord, int] = {c: i for i, c in enumerate(self.water_cells)}
 
         self.population_size = population_size
         self.mutation_rate = mutation_rate
 
-    # --- FITNESS CALCULATION ---
+        if seed is not None:
+            random.seed(seed)
 
-    def fitness(self, walls: List[Tuple[int, int]]) -> float:
+    # ----------------------------
+    # Helpers
+    # ----------------------------
+
+    def _indices_to_walls(self, ind: IndexSet) -> List[Coord]:
+        return [self.water_cells[i] for i in ind]
+
+    def _indices_to_walls_set(self, ind: IndexSet) -> Set[Coord]:
+        return {self.water_cells[i] for i in ind}
+
+    def fitness(self, ind: IndexSet) -> float:
+        walls_set = self._indices_to_walls_set(ind)
+        a = analyze_escape_walls(self.grid, self.moby_pos, walls_set)
+
+        if not a.escaped:
+            return self.BIG_GAP + a.area
+        return -self.BIG_GAP - (a.frontier_count * self.ESCAPE_FRONTIER_PENALTY) - a.area
+
+    # ----------------------------
+    # Initialization & Repair (Targeted)
+    # ----------------------------
+
+    def create_individual(self, quadrant: int = 0) -> IndexSet:
         """
-        Calculates the fitness score of a wall configuration.
-
-        Soft Penalty approach:
-        - Entrapment successful: High score + area bonus
-        - Escape exists: Low score but evolution continues
-
-        Args:
-            walls: List of wall coordinates
-
-        Returns:
-            Fitness score (higher is better)
+        Creates an individual biased towards a specific quadrant.
+        quadrant: 0=Any, 1=Top-Left, 2=Top-Right, 3=Bottom-Left, 4=Bottom-Right
         """
-        test_grid = place_walls(self.grid, walls)
-        analysis = analyze_escape(test_grid, self.moby_pos)
+        ind: Set[int] = set()
+
+        # --- Bölge Sınırlarını Belirle ---
+        mid_x = self.cols // 2
+        mid_y = self.rows // 2
+
+        allowed_indices = []
+        for i, (x, y) in enumerate(self.water_cells):
+            if (x, y) == self.moby_pos: continue
+
+            is_valid = True
+            if quadrant == 1 and not (x <= mid_x and y <= mid_y): is_valid = False
+            elif quadrant == 2 and not (x >= mid_x and y <= mid_y): is_valid = False
+            elif quadrant == 3 and not (x <= mid_x and y >= mid_y): is_valid = False
+            elif quadrant == 4 and not (x >= mid_x and y >= mid_y): is_valid = False
+
+            if is_valid: allowed_indices.append(i)
+
+        # Eğer bölge çok darsa tüm haritayı aç (fallback)
+        if len(allowed_indices) < self.max_walls:
+            allowed_indices = [i for i in range(self.n) if self.water_cells[i] != self.moby_pos]
+
+        # --- Greedy Build ---
+        for _ in range(self.max_walls * 2):
+            if len(ind) >= self.max_walls: break
+
+            walls_set = self._indices_to_walls_set(ind)
+            analysis, visited, boundary = analyze_escape_detailed_walls(self.grid, self.moby_pos, walls_set)
+
+            # Sadece izin verilen bölgeden seç
+            remaining = [i for i in allowed_indices if i not in ind]
+            if not remaining: break
+
+            pick_pool = []
+
+            if analysis.escaped:
+                # Path Blocking (Bölge içi)
+                paths = [get_stochastic_escape_path_walls(self.grid, self.moby_pos, walls_set) for _ in range(2)]
+                path = max(paths, key=len, default=[])
+                path = path[2:] # Moby'nin dibine koyma
+
+                path_pool = [self.coord_to_idx[c] for c in path if c in self.coord_to_idx]
+                path_pool = [i for i in path_pool if i in remaining] # Filtrele
+
+                if path_pool: pick_pool = path_pool
+                else: pick_pool = remaining
+            else:
+                # Trapped: Dışarı doğru genişle
+                outside = [self.coord_to_idx[c] for c in self.water_cells if c not in visited and c in self.coord_to_idx]
+                pick_pool = [i for i in outside if i in remaining]
+
+            if not pick_pool: pick_pool = remaining
+            ind.add(random.choice(pick_pool))
+
+        return self._repair_to_k(ind)
+
+    def _repair_to_k(self, ind: IndexSet) -> IndexSet:
+        ind = set(ind)
+        if len(ind) == self.max_walls: return ind
+        if len(ind) > self.max_walls: return set(random.sample(list(ind), self.max_walls))
+
+        # Basit tamamlama (Bölge kısıtlaması olmadan, sadece tamir etsin)
+        walls_set = self._indices_to_walls_set(ind)
+        analysis, visited, boundary = analyze_escape_detailed_walls(self.grid, self.moby_pos, walls_set)
+
+        remaining = [i for i in range(self.n) if i not in ind and self.water_cells[i] != self.moby_pos]
+
+        def add_from_pool(pool: List[int]):
+            random.shuffle(pool)
+            for idx in pool:
+                if len(ind) >= self.max_walls: break
+                ind.add(idx)
 
         if not analysis.escaped:
-            # Entrapment successful - high score
-            return self.FITNESS_TRAP_BASE + (analysis.area * self.FITNESS_AREA_MULTIPLIER)
+            outside = [self.coord_to_idx[c] for c in self.water_cells if c not in visited and c in self.coord_to_idx]
+            outside = [i for i in outside if i in remaining]
+            if outside: add_from_pool(outside)
         else:
-            # Escape exists - soft penalty
-            frontier_penalty = analysis.frontier_count * self.FITNESS_FRONTIER_PENALTY
-            area_score = (self.map_state.total_water_count - analysis.area) * 10
-            score = self.FITNESS_SOFT_BASE + area_score - frontier_penalty
-            return max(self.FITNESS_MIN_SCORE, score)
+            path = get_stochastic_escape_path_walls(self.grid, self.moby_pos, walls_set)
+            path_pool = [self.coord_to_idx[c] for c in path if c in self.coord_to_idx]
+            path_pool = [i for i in path_pool if i in remaining]
+            if path_pool: add_from_pool(path_pool)
 
-    # --- INDIVIDUAL CREATION ---
+        if len(ind) < self.max_walls: add_from_pool(remaining)
+        return ind
 
-    def create_individual(self) -> List[Tuple[int, int]]:
-        """
-        Creates a new individual (wall configuration).
+    # ----------------------------
+    # Genetic Operators
+    # ----------------------------
 
-        Strategy: Semi-random, semi-edge focused start.
-        """
-        walls = []
-        max_attempts = self.max_walls * 10  # Infinite loop protection
-        attempts = 0
+    def _tournament_select(self, scored: List[Tuple[IndexSet, float]]) -> IndexSet:
+        tournament = random.sample(scored, self.TOURNAMENT_SIZE)
+        tournament.sort(key=lambda x: x[1], reverse=True)
+        return set(tournament[0][0])
 
-        while len(walls) < self.max_walls and attempts < max_attempts:
-            attempts += 1
+    def crossover(self, p1: IndexSet, p2: IndexSet) -> IndexSet:
+        p1 = set(p1)
+        p2 = set(p2)
+        common = p1 & p2
+        child = set(common)
+        pool = list((p1 | p2) - common)
+        random.shuffle(pool)
+        for idx in pool:
+            if len(child) >= self.max_walls: break
+            child.add(idx)
+        return self._repair_to_k(child)
 
-            if random.random() < self.EDGE_BIAS_PROBABILITY:
-                # Choose a spot near the right edge
-                pos = self._get_random_edge_position()
-            else:
-                # Completely random
-                pos = random.choice(self.water_cells)
+    def mutate(self, ind: IndexSet) -> IndexSet:
+        if random.random() >= self.mutation_rate: return ind
+        ind = set(ind)
+        if not ind: return self.create_individual(quadrant=0)
 
-            if pos is not None and pos not in walls:
-                walls.append(pos)
-
-        # Fill remaining if missing
-        self._fill_remaining_walls(walls)
-
-        return walls[:self.max_walls]
-
-    def _get_random_edge_position(self) -> Tuple[int, int]:
-        """Returns a random water cell near the right edge."""
-        edge_start = self.cols - self.EDGE_COLUMN_COUNT
-
-        for _ in range(20):  # Max attempts
-            rx = random.randint(edge_start, self.cols - 1)
-            ry = random.randint(0, self.rows - 1)
-            if (rx, ry) in self.water_cells_set:
-                return (rx, ry)
-
-        return random.choice(self.water_cells)
-
-    def _fill_remaining_walls(self, walls: List[Tuple[int, int]]) -> None:
-        """Fills missing walls randomly."""
-        remaining = [cell for cell in self.water_cells if cell not in walls]
-        needed = self.max_walls - len(walls)
-
-        if needed > 0 and remaining:
-            additions = random.sample(remaining, min(needed, len(remaining)))
-            walls.extend(additions)
-
-    # --- MUTATION ---
-
-    def mutate(self, individual: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
-        """
-        Applies mutation to the individual.
-
-        Three strategies:
-        1. Path blocking (40%): Block the active escape route
-        2. Geometry (30%): Move to a neighbor of an existing wall
-        3. Random (30%): Change completely randomly
-        """
-        if random.random() >= self.mutation_rate:
-            return individual
-
-        rand_val = random.random()
-
-        if rand_val < self.MUTATION_PATH_BLOCK_THRESHOLD:
-            return self._mutate_path_block(individual)
-        elif rand_val < self.MUTATION_GEOMETRY_THRESHOLD:
-            return self._mutate_geometry(individual)
+        # Shift or Swap
+        if random.random() < self.MUTATION_SHIFT_PROB:
+            # SHIFT
+            wall_idx = random.choice(list(ind))
+            wx, wy = self.water_cells[wall_idx]
+            neighbors = [(wx+1, wy), (wx-1, wy), (wx, wy+1), (wx, wy-1)]
+            valid_neighbors = []
+            for nx, ny in neighbors:
+                if (nx, ny) == self.moby_pos: continue
+                n_idx = self.coord_to_idx.get((nx, ny))
+                if n_idx is not None and n_idx not in ind:
+                    valid_neighbors.append(n_idx)
+            if valid_neighbors:
+                ind.remove(wall_idx)
+                ind.add(random.choice(valid_neighbors))
         else:
-            return self._mutate_random(individual)
+            # SWAP
+            ind.remove(random.choice(list(ind)))
+            remaining = [i for i in range(self.n) if i not in ind and self.water_cells[i] != self.moby_pos]
+            if remaining: ind.add(random.choice(remaining))
+            ind = self._repair_to_k(ind)
 
-    def _mutate_path_block(self, individual: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
-        """Escape path blocking mutation."""
-        current_grid = place_walls(self.grid, individual)
-        path = get_stochastic_escape_path(current_grid, self.moby_pos)
+        return ind
 
-        if path and len(path) > 1:
-            # Block a spot in the middle/end of the path
-            target = path[random.randint(1, len(path) - 1)]
-            idx = random.randint(0, self.max_walls - 1)
-            individual[idx] = target
-
-        return individual
-
-    def _mutate_geometry(self, individual: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
-        """Neighbor wall mutation (wall brotherhood)."""
-        ref_idx = random.randint(0, self.max_walls - 1)
-        ref_wall = individual[ref_idx]
-
-        # Find neighbors of the reference wall
-        neighbors = self._get_water_neighbors(ref_wall, individual)
-
-        if neighbors:
-            target = random.choice(neighbors)
-            move_idx = random.randint(0, self.max_walls - 1)
-            if move_idx != ref_idx:
-                individual[move_idx] = target
-
-        return individual
-
-    def _mutate_random(self, individual: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
-        """Random mutation."""
-        idx = random.randint(0, self.max_walls - 1)
-        remaining = [cell for cell in self.water_cells if cell not in individual]
-
-        if remaining:
-            individual[idx] = random.choice(remaining)
-
-        return individual
-
-    def _get_water_neighbors(
-        self,
-        pos: Tuple[int, int],
-        exclude: List[Tuple[int, int]]
-    ) -> List[Tuple[int, int]]:
-        """Returns water neighbors of the given position."""
-        neighbors = []
-        x, y = pos
-
-        for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
-            nx, ny = x + dx, y + dy
-            if (nx, ny) in self.water_cells_set and (nx, ny) not in exclude:
-                neighbors.append((nx, ny))
-
-        return neighbors
-
-    # --- CROSSOVER ---
-
-    def crossover(
-        self,
-        parent1: List[Tuple[int, int]],
-        parent2: List[Tuple[int, int]]
-    ) -> List[Tuple[int, int]]:
-        """
-        Creates a new individual from two parents (single point crossover).
-        """
-        crossover_point = random.randint(1, self.max_walls - 1)
-        child = list(set(parent1[:crossover_point] + parent2[crossover_point:]))
-
-        # Fill missing walls
-        self._fill_remaining_walls(child)
-
-        return child[:self.max_walls]
-
-    # --- SELECTION ---
-
-    def _tournament_select(
-        self,
-        scored_population: List[Tuple[List[Tuple[int, int]], float]]
-    ) -> List[Tuple[int, int]]:
-        """Selects parent using tournament selection."""
-        tournament = random.sample(scored_population, self.TOURNAMENT_SIZE)
-        winner = max(tournament, key=lambda x: x[1])
-        return winner[0]
-
-    # --- MAIN SOLVER LOOP ---
+    # ----------------------------
+    # MAIN LOOP (THE ISLAND MODEL)
+    # ----------------------------
 
     def solve(self, generations: int = 150) -> Dict:
         """
-        Runs the genetic algorithm.
-
-        Args:
-            generations: Number of generations
-
-        Returns:
-            {
-                'solvable': bool,
-                'optimal_area': int,
-                'solution': List[Tuple[int, int]]
-            }
+        Runs 4 parallel islands that do NOT mix.
         """
-        population = [self.create_individual() for _ in range(self.population_size)]
-        best_solution = None
-        best_score = -float('inf')
+        island_size = self.population_size // 4
 
-        for generation in range(generations):
-            # Calculate Fitness
-            scored_population = [(ind, self.fitness(ind)) for ind in population]
+        # 4 Ayrı Ada Oluştur (Kuzey-Batı, Kuzey-Doğu, Güney-Batı, Güney-Doğu)
+        islands = []
+        for q in range(1, 5):
+            island_pop = [self.create_individual(quadrant=q) for _ in range(island_size)]
+            islands.append(island_pop)
 
-            # Update Best
-            generation_best = max(scored_population, key=lambda x: x[1])
-            if generation_best[1] > best_score:
-                best_score = generation_best[1]
-                best_solution = generation_best[0].copy()
+        global_best_ind = None
+        global_best_fit = -float("inf")
 
-            # Create New Population
-            population = self._create_next_generation(scored_population)
+        for _gen in range(generations):
 
-        # Final check
-        return self._finalize_solution(best_solution)
+            # Her adayı kendi içinde evrimleştir
+            for i in range(4):
+                population = islands[i]
 
-    def _create_next_generation(
-        self,
-        scored_population: List[Tuple[List[Tuple[int, int]], float]]
-    ) -> List[List[Tuple[int, int]]]:
-        """Creates the next generation."""
-        # Sort
-        scored_population.sort(key=lambda x: x[1], reverse=True)
+                # 1. Score Island
+                scored = []
+                for ind in population:
+                    f = self.fitness(ind)
+                    scored.append((ind, f))
 
-        # Elitism: Keep the top 10%
-        elite_count = int(self.population_size * self.ELITE_RATIO)
-        new_population = [x[0] for x in scored_population[:elite_count]]
+                    # Global best check
+                    if f > global_best_fit:
+                        global_best_fit = f
+                        global_best_ind = set(ind)
 
-        # Generate remaining individuals
-        while len(new_population) < self.population_size:
-            parent1 = self._tournament_select(scored_population)
-            parent2 = self._tournament_select(scored_population)
-            child = self.crossover(parent1, parent2)
-            child = self.mutate(child)
-            new_population.append(child)
+                scored.sort(key=lambda x: x[1], reverse=True)
 
-        return new_population
+                # 2. Elitism (Island specific)
+                elite_count = max(1, int(island_size * self.ELITE_RATIO))
+                new_pop = [set(x[0]) for x in scored[:elite_count]]
 
-    def _finalize_solution(self, solution: List[Tuple[int, int]]) -> Dict:
-        """Performs final check on the solution."""
-        if not solution:
-            return {'solvable': False, 'optimal_area': 0, 'solution': []}
+                # 3. Breed (Island specific - NO MIXING between islands)
+                while len(new_pop) < island_size:
+                    p1 = self._tournament_select(scored)
+                    p2 = self._tournament_select(scored)
+                    child = self.crossover(p1, p2)
+                    child = self.mutate(child)
+                    new_pop.append(child)
 
-        grid = place_walls(self.grid, solution)
-        analysis = analyze_escape(grid, self.moby_pos)
+                islands[i] = new_pop
 
-        if analysis.escaped:
-            return {'solvable': False, 'optimal_area': 0, 'solution': solution}
+        return self._finalize_solution(global_best_ind)
 
-        return {
-            'solvable': True,
-            'optimal_area': analysis.area,
-            'solution': solution
-        }
+    def _finalize_solution(self, best_ind: Optional[IndexSet]) -> Dict:
+        if not best_ind: return {'solvable': False, 'optimal_area': 0, 'solution': []}
+        walls = self._indices_to_walls(best_ind)
+        walls_set = set(walls)
+        a = analyze_escape_walls(self.grid, self.moby_pos, walls_set)
+        if a.escaped: return {'solvable': False, 'optimal_area': 0, 'solution': walls}
+        return {'solvable': True, 'optimal_area': a.area, 'solution': walls}

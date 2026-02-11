@@ -7,7 +7,7 @@ import numpy as np
 
 from constants import (
     WATER, LAND, BUOY, MOBY,
-    PATHFINDER_MAP, PATHFINDER_MOBY_POS, PATHFINDER_OPTIMAL_SOLUTION
+    PATHFINDER_MAP, PATHFINDER_MOBY_POS, PATHFINDER_OPTIMAL_SOLUTION, PATHFINDER_OPTIMAL_AREA
 )
 
 
@@ -74,7 +74,7 @@ def compare_solutions(
     if optimal_walls is None:
         optimal_walls = PATHFINDER_OPTIMAL_SOLUTION
     if optimal_score is None:
-        optimal_score = 68
+        optimal_score = PATHFINDER_OPTIMAL_AREA
 
     # Visualize
     visualize_grid(found_walls, f"FOUND SOLUTION ({found_score} Points)")

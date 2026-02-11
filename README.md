@@ -94,7 +94,7 @@ enclose.mobyAi/
 │   └── solver/
 │       ├── v1_baseline_limitations.py   # Initial approach (stuck at 65)
 │       └── v2_soft_penalty_solution.py  # Soft penalty breakthrough (68/68)
-││
+│
 └── README.md
 ```
 

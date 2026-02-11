@@ -93,9 +93,8 @@ enclose.mobyAi/
 ├── research_history/    # R&D Lab - The Engineering Journey
 │   └── solver/
 │       ├── v1_baseline_limitations.py   # Initial approach (stuck at 65)
-│       ├── v2_soft_penalty_solution.py  # Soft penalty breakthrough (68/68)
-│       └── v3_island_memetic.py         # Island Model + Optimizer (109/109)
-│
+│       └── v2_soft_penalty_solution.py  # Soft penalty breakthrough (68/68)
+││
 └── README.md
 ```
 
@@ -345,9 +344,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-<p align="center">
-  <strong>From 87 to 109: The Journey from Local to Global Optimum</strong>
-</p>
 <p align="center">
   Made with ❤️ and lots of ☕
 </p>
